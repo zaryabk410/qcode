@@ -313,6 +313,7 @@ async function callModel(messages, onDelta, signal) {
           'Content-Type': 'application/json',
           Authorization: 'Bearer ' + s.apiKey,
           'HTTP-Referer': location.origin,
+          'X-OpenRouter-Title': 'QCode',
           'X-Title': 'QCode',
         },
         body: JSON.stringify({ model, messages, stream: true, temperature: s.temperature, max_tokens: 16000 }),
