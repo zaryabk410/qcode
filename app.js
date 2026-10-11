@@ -37,6 +37,7 @@ const state = {
   busy: false,
   abort: null,
 };
+state.settings.apiKey = String(state.settings.apiKey || '').replace(/^\s*(Bearer\s+)?/i, '').replace(/["'`\s]/g, '').replace(/[^\x21-\x7E]/g, '');
 
 if (!state.files) {
   state.files = {
@@ -59,6 +60,8 @@ function toast(t) {
   clearTimeout(toastTimer); toastTimer = setTimeout(() => el.classList.remove('show'), 2500);
 }
 const setStatus = (t) => { $('#status').textContent = t || ''; };
+// strip quotes, "Bearer ", whitespace and invisible/non-ASCII chars picked up when copy-pasting
+const cleanKey = (k) => String(k || '').replace(/^\s*(Bearer\s+)?/i, '').replace(/["'`\s]/g, '').replace(/[^\x21-\x7E]/g, '');
 const normPath = (p) => String(p || '').trim().replace(/^\.?\/+/, '').replace(/\\/g, '/');
 
 /* ---------------- file explorer & editor ---------------- */
@@ -223,12 +226,29 @@ function openSettings() {
   dlg.showModal();
 }
 $('#openSettings').onclick = openSettings;
+// Enter inside a settings field = Save (default would trigger the first button, Cancel)
+form.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && e.target.tagName === 'INPUT') { e.preventDefault(); dlg.close('save'); }
+});
+
+async function checkKey() {
+  const s = state.settings;
+  if (!s.apiKey) return toast('No API key set');
+  if (!/openrouter\.ai/.test(s.baseUrl)) return toast('Key saved');
+  if (!/^sk-or-v1-[A-Za-z0-9]+$/.test(s.apiKey)) toast('Warning: key does not look like an OpenRouter key (sk-or-v1-…)');
+  try {
+    const r = await fetch(s.baseUrl.replace(/\/$/, '') + '/key', { headers: { Authorization: 'Bearer ' + s.apiKey } });
+    if (r.ok) toast('✓ OpenRouter key valid');
+    else addMsg('error', `API key rejected by OpenRouter (HTTP ${r.status}). Create a new key at <a href="https://openrouter.ai/keys" target="_blank" rel="noopener">openrouter.ai/keys</a> and paste it in ⚙ Settings.`);
+  } catch (e) { toast('Could not verify key: ' + e.message); }
+}
+
 dlg.addEventListener('close', () => {
   if (dlg.returnValue !== 'save') return;
   const f = form.elements;
   Object.assign(state.settings, {
     baseUrl: f.baseUrl.value.trim() || 'https://openrouter.ai/api/v1',
-    apiKey: f.apiKey.value.trim(),
+    apiKey: cleanKey(f.apiKey.value),
     customModel: f.customModel.value.trim(),
     maxSteps: Math.max(1, Math.min(100, +f.maxSteps.value || 25)),
     temperature: isNaN(parseFloat(f.temperature.value)) ? 0.2 : parseFloat(f.temperature.value),
@@ -236,7 +256,7 @@ dlg.addEventListener('close', () => {
     fallback: f.fallback.checked,
   });
   store.set('settings', state.settings);
-  toast('Settings saved');
+  checkKey();
 });
 
 /* ---------------- chat rendering ---------------- */
@@ -303,6 +323,10 @@ async function callModel(messages, onDelta, signal) {
     }
     if (!res.ok) {
       const t = await res.text().catch(() => '');
+      if (res.status === 401 || res.status === 403) {
+        setTimeout(openSettings, 300);
+        throw new Error(`API key rejected (HTTP ${res.status}). The key is invalid, revoked, or not an OpenRouter key. Create a new one at openrouter.ai/keys and paste it in Settings. Server said: ${t.slice(0, 200)}`);
+      }
       lastErr = new Error(`${model}: HTTP ${res.status} ${t.slice(0, 300)}`);
       if (s.fallback && [400, 402, 404, 408, 429, 500, 502, 503, 504].includes(res.status)) {
         addMsg('system', `⚠ ${esc(model)} unavailable (HTTP ${res.status}) — trying next free model…`);
